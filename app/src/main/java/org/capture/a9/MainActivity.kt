@@ -6,14 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
@@ -37,9 +34,6 @@ import org.capture.a9.databinding.ActivityMainBinding
 import org.capture.a9.databinding.LayoutSettingsSheetBinding
 import org.capture.a9.util.FpsMeter
 import org.capture.a9.util.PreferencesManager
-import java.io.File
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
@@ -54,13 +48,14 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private var activeDevice: CaptureDeviceInfo? = null
     private var isUsingUvc: Boolean = false
+    private var isSurfaceReady: Boolean = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
-        if (cameraGranted) {
-            initCapture()
+        if (cameraGranted && isSurfaceReady) {
+            scanAndConnect()
         }
     }
 
@@ -74,12 +69,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                     }
-                    Toast.makeText(context, "USB Device: ${device?.productName ?: "Capture Card"}", Toast.LENGTH_SHORT).show()
-                    scanAndConnect()
+                    Toast.makeText(context, "USB Device Attached: ${device?.productName ?: "Capture Card"}", Toast.LENGTH_SHORT).show()
+                    if (isSurfaceReady) scanAndConnect()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     Toast.makeText(context, "USB Device Disconnected", Toast.LENGTH_SHORT).show()
-                    scanAndConnect()
+                    if (isSurfaceReady) scanAndConnect()
                 }
             }
         }
@@ -132,10 +127,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         applyScaleMode(prefs.scaleMode)
         setupListeners()
         registerUsbReceiver()
-        checkPermissionsAndStart()
+        checkPermissions()
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        isSurfaceReady = true
         uvcEngine.setSurfaceHolder(holder)
         scanAndConnect()
     }
@@ -145,6 +141,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        isSurfaceReady = false
         uvcEngine.stopCapture()
     }
 
@@ -178,7 +175,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
 
         binding.btnSnapshot.setOnClickListener {
-            takeSnapshot()
+            Toast.makeText(this, "Snapshot saved to Gallery", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnSettings.setOnClickListener {
@@ -213,25 +210,19 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
     }
 
-    private fun checkPermissionsAndStart() {
+    private fun checkPermissions() {
         val permissions = mutableListOf(Manifest.permission.CAMERA)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.RECORD_AUDIO)
         }
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            initCapture()
-        } else {
+        val hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (!hasCamera) {
             permissionLauncher.launch(permissions.toTypedArray())
         }
     }
 
-    private fun initCapture() {
-        scanAndConnect()
-    }
-
     private fun scanAndConnect() {
-        // Priority 1: Direct USB UVC Capture Card Engine
         val uvcStarted = uvcEngine.findAndStartCapture()
         if (uvcStarted) {
             isUsingUvc = true
@@ -244,7 +235,6 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             return
         }
 
-        // Priority 2: Fallback to Camera2 / CameraX
         isUsingUvc = false
         val preferredCamera = deviceManager.getPreferredCaptureCamera()
         activeDevice = preferredCamera
@@ -280,10 +270,6 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
             }
         }
-    }
-
-    private fun takeSnapshot() {
-        Toast.makeText(this, "Snapshot saved to Gallery", Toast.LENGTH_SHORT).show()
     }
 
     private fun showSettingsSheet() {

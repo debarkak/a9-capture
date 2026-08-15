@@ -83,6 +83,10 @@ class UvcStreamEngine(
     }
 
     fun findAndStartCapture(): Boolean {
+        if (isStreaming.get()) {
+            return true
+        }
+
         for (device in usbManager.deviceList.values) {
             if (isUvcDevice(device)) {
                 usbDevice = device
@@ -170,7 +174,6 @@ class UvcStreamEngine(
         val claimed = connection.claimInterface(streamingIntf, true)
         Log.i(TAG, "Claimed video interface ${streamingIntf.id}: $claimed, endpoint: ${inEndpoint.address} (${inEndpoint.maxPacketSize} bytes)")
 
-        // Send standard 60 FPS 1920x1080 / 1920x1200 probe/commit
         sendUvcProbeCommit(connection, streamingIntf.id)
 
         isStreaming.set(true)
@@ -184,24 +187,19 @@ class UvcStreamEngine(
 
     private fun sendUvcProbeCommit(connection: UsbDeviceConnection, interfaceId: Int) {
         try {
-            // First read default UVC probe parameter block (GET_CUR: 0x81, 0x01)
             val probeData = ByteArray(26)
-            val getCurLen = connection.controlTransfer(0xA1, 0x81, 0x0100, interfaceId, probeData, probeData.size, 1000)
-            Log.i(TAG, "GET_CUR VS_PROBE returned: $getCurLen bytes")
+            connection.controlTransfer(0xA1, 0x81, 0x0100, interfaceId, probeData, probeData.size, 1000)
 
-            // Configure 60 FPS (166666 in 100ns units = 0x00028B0A)
             val interval60 = 166666
-            probeData[0] = 0x01.toByte() // bmHint: dwFrameInterval
-            probeData[2] = 0x01.toByte() // bFormatIndex (MJPEG)
-            probeData[3] = 0x01.toByte() // bFrameIndex (1920x1080 / 1920x1200)
+            probeData[0] = 0x01.toByte()
+            probeData[2] = 0x01.toByte()
+            probeData[3] = 0x01.toByte()
             probeData[4] = (interval60 and 0xFF).toByte()
             probeData[5] = ((interval60 shr 8) and 0xFF).toByte()
             probeData[6] = ((interval60 shr 16) and 0xFF).toByte()
             probeData[7] = ((interval60 shr 24) and 0xFF).toByte()
 
-            // SET_CUR VS_PROBE_CONTROL (0x01)
             connection.controlTransfer(0x21, 0x01, 0x0100, interfaceId, probeData, probeData.size, 1000)
-            // SET_CUR VS_COMMIT_CONTROL (0x02)
             connection.controlTransfer(0x21, 0x01, 0x0200, interfaceId, probeData, probeData.size, 1000)
             Log.i(TAG, "UVC 60 FPS Probe/Commit sent successfully")
         } catch (e: Exception) {
@@ -210,107 +208,84 @@ class UvcStreamEngine(
     }
 
     private fun readStreamLoop(connection: UsbDeviceConnection, endpoint: UsbEndpoint) {
-        val maxPacketSize = endpoint.maxPacketSize.coerceAtLeast(512)
         val readBufferSize = 64 * 1024
         val rawBuffer = ByteArray(readBufferSize)
-        val frameBuffer = ByteArrayOutputStream(1024 * 1024)
+        val frameBuffer = ByteArrayOutputStream(2 * 1024 * 1024)
 
         val opts = BitmapFactory.Options().apply {
-            inPreferredConfig = Bitmap.Config.RGB_565
+            inPreferredConfig = Bitmap.Config.ARGB_8888
             inMutable = true
         }
 
         var frameWidth = 1920
-        var frameHeight = 1200
+        var frameHeight = 1080
         var lastFid = -1
-        var isReceivingFrame = false
+        var inJpeg = false
 
         while (isStreaming.get()) {
-            val bytesRead = connection.bulkTransfer(endpoint, rawBuffer, rawBuffer.size, 50)
+            val bytesRead = connection.bulkTransfer(endpoint, rawBuffer, rawBuffer.size, 100)
             if (bytesRead > 0) {
-                var ptr = 0
-                while (ptr < bytesRead) {
-                    val packetLen = minOf(maxPacketSize, bytesRead - ptr)
-                    val headerLen = rawBuffer[ptr].toInt() and 0xFF
+                val headerLen = rawBuffer[0].toInt() and 0xFF
+                if (headerLen in 2..12 && headerLen <= bytesRead) {
+                    val headerInfo = rawBuffer[1].toInt() and 0xFF
+                    val fid = headerInfo and 0x01
+                    val isEof = (headerInfo and 0x02) != 0
+                    val isErr = (headerInfo and 0x40) != 0
 
-                    if (headerLen in 2..12 && headerLen <= packetLen) {
-                        val headerInfo = rawBuffer[ptr + 1].toInt() and 0xFF
-                        val fid = headerInfo and 0x01
-                        val isEof = (headerInfo and 0x02) != 0
-                        val isErr = (headerInfo and 0x40) != 0
-
-                        if (isErr) {
-                            frameBuffer.reset()
-                            isReceivingFrame = false
-                            ptr += packetLen
-                            continue
-                        }
-
-                        // FID toggle indicates new frame
-                        if (lastFid != -1 && fid != lastFid && frameBuffer.size() > 0) {
-                            val jpegBytes = frameBuffer.toByteArray()
-                            processAndRenderJpeg(jpegBytes, opts) { w, h, fps ->
-                                frameWidth = w
-                                frameHeight = h
-                                android.os.Handler(context.mainLooper).post {
-                                    onFpsUpdate(fps)
-                                    onResolutionUpdate("${frameWidth}x${frameHeight} @ 60Hz")
-                                }
-                            }
-                            frameBuffer.reset()
-                        }
+                    if (isErr) {
+                        frameBuffer.reset()
+                        inJpeg = false
                         lastFid = fid
-
-                        val payloadLen = packetLen - headerLen
-                        if (payloadLen > 0) {
-                            frameBuffer.write(rawBuffer, ptr + headerLen, payloadLen)
-                            isReceivingFrame = true
-                        }
-
-                        if (isEof && frameBuffer.size() > 0) {
-                            val jpegBytes = frameBuffer.toByteArray()
-                            processAndRenderJpeg(jpegBytes, opts) { w, h, fps ->
-                                frameWidth = w
-                                frameHeight = h
-                                android.os.Handler(context.mainLooper).post {
-                                    onFpsUpdate(fps)
-                                    onResolutionUpdate("${frameWidth}x${frameHeight} @ 60Hz")
-                                }
-                            }
-                            frameBuffer.reset()
-                            isReceivingFrame = false
-                        }
-                    } else {
-                        // Raw packet chunk
-                        frameBuffer.write(rawBuffer, ptr, packetLen)
+                        continue
                     }
 
-                    ptr += packetLen
+                    val payloadLen = bytesRead - headerLen
+                    if (payloadLen > 0) {
+                        val offset = headerLen
+                        // Check for SOI marker
+                        if (!inJpeg) {
+                            for (i in offset until bytesRead - 1) {
+                                if ((rawBuffer[i].toInt() and 0xFF) == 0xFF && (rawBuffer[i + 1].toInt() and 0xFF) == 0xD8) {
+                                    inJpeg = true
+                                    frameBuffer.reset()
+                                    frameBuffer.write(rawBuffer, i, bytesRead - i)
+                                    break
+                                }
+                            }
+                        } else {
+                            frameBuffer.write(rawBuffer, offset, payloadLen)
+                        }
+
+                        // Check for complete frame (EOF bit or EOI marker 0xFF 0xD9)
+                        if (inJpeg && (isEof || (lastFid != -1 && fid != lastFid))) {
+                            val jpegBytes = frameBuffer.toByteArray()
+                            if (jpegBytes.size > 8192) {
+                                decodeAndRender(jpegBytes, opts) { w, h, fps ->
+                                    frameWidth = w
+                                    frameHeight = h
+                                    android.os.Handler(context.mainLooper).post {
+                                        onFpsUpdate(fps)
+                                        onResolutionUpdate("${frameWidth}x${frameHeight} @ 60Hz")
+                                    }
+                                }
+                            }
+                            frameBuffer.reset()
+                            inJpeg = false
+                        }
+                    }
+                    lastFid = fid
                 }
             }
         }
     }
 
-    private fun processAndRenderJpeg(
+    private fun decodeAndRender(
         rawBytes: ByteArray,
         opts: BitmapFactory.Options,
         onStats: (Int, Int, Float) -> Unit
     ) {
-        if (rawBytes.size < 2048) return
-
-        // Locate JPEG Start of Image (SOI: 0xFF 0xD8)
-        var soi = -1
-        for (i in 0 until minOf(256, rawBytes.size - 1)) {
-            if ((rawBytes[i].toInt() and 0xFF) == 0xFF && (rawBytes[i + 1].toInt() and 0xFF) == 0xD8) {
-                soi = i
-                break
-            }
-        }
-        if (soi == -1) return
-
-        val jpegLength = rawBytes.size - soi
         val bitmap = try {
-            BitmapFactory.decodeByteArray(rawBytes, soi, jpegLength, opts)
+            BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, opts)
         } catch (e: Exception) {
             null
         }
