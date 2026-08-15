@@ -24,6 +24,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.capture.a9.audio.AudioPassthroughEngine
 import org.capture.a9.capture.Camera2CaptureEngine
@@ -125,6 +126,13 @@ class MainActivity : AppCompatActivity() {
             val nextMode = (prefs.scaleMode + 1) % 3
             prefs.scaleMode = nextMode
             applyScaleMode(nextMode)
+            val modeName = when (nextMode) {
+                PreferencesManager.SCALE_MODE_STRETCH -> "16:10 Fullscreen"
+                PreferencesManager.SCALE_MODE_FIT -> "16:9 Letterbox"
+                PreferencesManager.SCALE_MODE_FILL -> "Fill Crop"
+                else -> ""
+            }
+            Toast.makeText(this, "Scaling: $modeName", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnAudioToggle.setOnClickListener {
@@ -244,6 +252,9 @@ class MainActivity : AppCompatActivity() {
         val dialog = BottomSheetDialog(this)
         val sheetBinding = LayoutSettingsSheetBinding.inflate(layoutInflater)
         dialog.setContentView(sheetBinding.root)
+
+        dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        dialog.behavior.skipCollapsed = true
 
         sheetBinding.tvDeviceName.text = "Device: ${activeDevice?.name ?: "Default Camera"}"
 
