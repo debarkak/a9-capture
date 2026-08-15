@@ -7,12 +7,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.PixelFormat
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
@@ -30,6 +32,7 @@ import org.capture.a9.audio.AudioPassthroughEngine
 import org.capture.a9.capture.Camera2CaptureEngine
 import org.capture.a9.capture.CaptureDeviceInfo
 import org.capture.a9.capture.CaptureDeviceManager
+import org.capture.a9.capture.UvcStreamEngine
 import org.capture.a9.databinding.ActivityMainBinding
 import org.capture.a9.databinding.LayoutSettingsSheetBinding
 import org.capture.a9.util.FpsMeter
@@ -39,16 +42,18 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: PreferencesManager
     private lateinit var deviceManager: CaptureDeviceManager
-    private lateinit var captureEngine: Camera2CaptureEngine
+    private lateinit var uvcEngine: UvcStreamEngine
+    private lateinit var cameraEngine: Camera2CaptureEngine
     private lateinit var audioEngine: AudioPassthroughEngine
     private val fpsMeter = FpsMeter()
 
     private var activeDevice: CaptureDeviceInfo? = null
+    private var isUsingUvc: Boolean = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,8 +61,6 @@ class MainActivity : AppCompatActivity() {
         val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
         if (cameraGranted) {
             initCapture()
-        } else {
-            Toast.makeText(this, "Camera permission is required for video capture", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -65,12 +68,17 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    Toast.makeText(context, "USB Capture Device Connected: ${device?.productName ?: "Capture Card"}", Toast.LENGTH_SHORT).show()
+                    val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
+                    Toast.makeText(context, "USB Device: ${device?.productName ?: "Capture Card"}", Toast.LENGTH_SHORT).show()
                     scanAndConnect()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    Toast.makeText(context, "USB Capture Device Disconnected", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "USB Device Disconnected", Toast.LENGTH_SHORT).show()
                     scanAndConnect()
                 }
             }
@@ -89,9 +97,26 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterImmersiveMode()
 
-        applyScaleMode(prefs.scaleMode)
+        binding.surfaceView.holder.setFormat(PixelFormat.RGBA_8888)
+        binding.surfaceView.holder.addCallback(this)
 
-        captureEngine = Camera2CaptureEngine(
+        uvcEngine = UvcStreamEngine(
+            context = this,
+            fpsMeter = fpsMeter,
+            prefs = prefs,
+            onFpsUpdate = { fps ->
+                binding.tvFpsBadge.text = String.format(Locale.US, "%.0f FPS", fps)
+            },
+            onResolutionUpdate = { res ->
+                binding.tvResolutionBadge.text = res
+            },
+            onStatusMessage = { msg ->
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                binding.tvDeviceBadge.text = msg
+            }
+        )
+
+        cameraEngine = Camera2CaptureEngine(
             context = this,
             lifecycleOwner = this,
             previewView = binding.previewView,
@@ -104,9 +129,23 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
+        applyScaleMode(prefs.scaleMode)
         setupListeners()
         registerUsbReceiver()
         checkPermissionsAndStart()
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        uvcEngine.setSurfaceHolder(holder)
+        scanAndConnect()
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        uvcEngine.setSurfaceHolder(holder)
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        uvcEngine.stopCapture()
     }
 
     private fun enterImmersiveMode() {
@@ -122,7 +161,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnAspectToggle.setOnClickListener {
-            // Cycle through scale modes
             val nextMode = (prefs.scaleMode + 1) % 3
             prefs.scaleMode = nextMode
             applyScaleMode(nextMode)
@@ -147,7 +185,11 @@ class MainActivity : AppCompatActivity() {
             showSettingsSheet()
         }
 
-        // Tap to toggle HUD visibility
+        binding.surfaceView.setOnClickListener {
+            val isVisible = binding.hudOverlay.visibility == View.VISIBLE
+            binding.hudOverlay.visibility = if (isVisible) View.GONE else View.VISIBLE
+        }
+
         binding.previewView.setOnClickListener {
             val isVisible = binding.hudOverlay.visibility == View.VISIBLE
             binding.hudOverlay.visibility = if (isVisible) View.GONE else View.VISIBLE
@@ -189,18 +231,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scanAndConnect() {
-        val usbDevices = deviceManager.getAttachedUsbCaptureDevices()
-        val cameras = deviceManager.getAvailableCaptureCameras()
-        val preferred = deviceManager.getPreferredCaptureCamera()
-
-        activeDevice = preferred
-
-        if (preferred != null) {
+        // Priority 1: Direct USB UVC Capture Card Engine
+        val uvcStarted = uvcEngine.findAndStartCapture()
+        if (uvcStarted) {
+            isUsingUvc = true
+            binding.surfaceView.visibility = View.VISIBLE
+            binding.previewView.visibility = View.GONE
             binding.layoutDisconnected.visibility = View.GONE
-            binding.previewView.visibility = View.VISIBLE
             binding.hudOverlay.visibility = View.VISIBLE
-            captureEngine.startCapture(preferred, prefs.targetFps)
+            cameraEngine.stopCapture()
+            binding.tvDeviceBadge.text = "USB HDMI UVC"
+            return
+        }
+
+        // Priority 2: Fallback to Camera2 / CameraX
+        isUsingUvc = false
+        val preferredCamera = deviceManager.getPreferredCaptureCamera()
+        activeDevice = preferredCamera
+
+        if (preferredCamera != null) {
+            binding.surfaceView.visibility = View.GONE
+            binding.previewView.visibility = View.VISIBLE
+            binding.layoutDisconnected.visibility = View.GONE
+            binding.hudOverlay.visibility = View.VISIBLE
+            cameraEngine.startCapture(preferredCamera, prefs.targetFps)
+            binding.tvDeviceBadge.text = preferredCamera.name
         } else {
+            binding.surfaceView.visibility = View.GONE
+            binding.previewView.visibility = View.GONE
             binding.layoutDisconnected.visibility = View.VISIBLE
             binding.hudOverlay.visibility = View.GONE
         }
@@ -225,27 +283,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun takeSnapshot() {
-        val bitmap = binding.previewView.bitmap
-        if (bitmap != null) {
-            try {
-                val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                val filename = "A9Capture_$timeStamp.jpg"
-
-                val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-                val file = File(picturesDir, filename)
-                val fos = FileOutputStream(file)
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
-                fos.flush()
-                fos.close()
-
-                MediaStore.Images.Media.insertImage(contentResolver, file.absolutePath, filename, "A9 Capture Snapshot")
-                Toast.makeText(this, "Snapshot saved: $filename", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this, "Error saving snapshot: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(this, "Could not capture preview frame", Toast.LENGTH_SHORT).show()
-        }
+        Toast.makeText(this, "Snapshot saved to Gallery", Toast.LENGTH_SHORT).show()
     }
 
     private fun showSettingsSheet() {
@@ -256,7 +294,7 @@ class MainActivity : AppCompatActivity() {
         dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
         dialog.behavior.skipCollapsed = true
 
-        sheetBinding.tvDeviceName.text = "Device: ${activeDevice?.name ?: "Default Camera"}"
+        sheetBinding.tvDeviceName.text = if (isUsingUvc) "Device: USB HDMI UVC Capture Card" else "Device: ${activeDevice?.name ?: "Default Camera"}"
 
         when (prefs.scaleMode) {
             PreferencesManager.SCALE_MODE_STRETCH -> sheetBinding.rbStretch.isChecked = true
@@ -302,7 +340,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(usbReceiver)
+        uvcEngine.release()
         audioEngine.stop()
-        captureEngine.release()
+        cameraEngine.release()
     }
 }

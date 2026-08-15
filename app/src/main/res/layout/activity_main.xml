@@ -7,11 +7,22 @@
     android:layout_height="match_parent"
     android:background="@color/bg_dark">
 
-    <!-- Video Render Surface (Hardware SurfaceView overlay) -->
+    <!-- Direct Hardware SurfaceView for USB Capture Card -->
+    <SurfaceView
+        android:id="@+id/surfaceView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- CameraX PreviewView (Fallback) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        android:visibility="gone"
         app:implementationMode="performance"
         app:scaleType="fitCenter"
         app:layout_constraintTop_toTopOf="parent"
@@ -28,6 +39,7 @@
         android:gravity="center"
         android:padding="32dp"
         android:background="@drawable/bg_glass_card"
+        android:visibility="gone"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -98,11 +110,25 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintStart_toStartOf="parent">
 
+            <!-- Device Name Badge -->
+            <TextView
+                android:id="@+id/tvDeviceBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:background="@drawable/bg_pill_badge"
+                android:gravity="center"
+                android:paddingHorizontal="14dp"
+                android:text="USB HDMI"
+                android:textColor="@color/text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
             <!-- FPS Badge -->
             <TextView
                 android:id="@+id/tvFpsBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
+                android:layout_marginStart="8dp"
                 android:background="@drawable/bg_pill_badge"
                 android:gravity="center"
                 android:paddingHorizontal="14dp"
@@ -134,7 +160,7 @@
                 android:background="@drawable/bg_pill_badge"
                 android:gravity="center"
                 android:paddingHorizontal="14dp"
-                android:text="16:10 STRETCH"
+                android:text="16:10 FULL"
                 android:textColor="@color/amber_accent"
                 android:textSize="12sp"
                 android:textStyle="bold" />
