@@ -218,7 +218,7 @@ class UvcStreamEngine(
         }
 
         var frameWidth = 1920
-        var frameHeight = 1080
+        var frameHeight = 1200
         var lastFid = -1
         var inJpeg = false
 
@@ -242,7 +242,6 @@ class UvcStreamEngine(
                     val payloadLen = bytesRead - headerLen
                     if (payloadLen > 0) {
                         val offset = headerLen
-                        // Check for SOI marker
                         if (!inJpeg) {
                             for (i in offset until bytesRead - 1) {
                                 if ((rawBuffer[i].toInt() and 0xFF) == 0xFF && (rawBuffer[i + 1].toInt() and 0xFF) == 0xD8) {
@@ -256,7 +255,7 @@ class UvcStreamEngine(
                             frameBuffer.write(rawBuffer, offset, payloadLen)
                         }
 
-                        // Check for complete frame (EOF bit or EOI marker 0xFF 0xD9)
+                        // Complete Frame Trigger
                         if (inJpeg && (isEof || (lastFid != -1 && fid != lastFid))) {
                             val jpegBytes = frameBuffer.toByteArray()
                             if (jpegBytes.size > 8192) {
@@ -306,34 +305,9 @@ class UvcStreamEngine(
                 val surfaceWidth = canvas.width
                 val surfaceHeight = canvas.height
 
-                when (prefs.scaleMode) {
-                    PreferencesManager.SCALE_MODE_STRETCH -> {
-                        // 16:10 Full stretch (Tab A9+ 1920x1200)
-                        val dstRect = Rect(0, 0, surfaceWidth, surfaceHeight)
-                        canvas.drawBitmap(bitmap, null, dstRect, paint)
-                    }
-                    PreferencesManager.SCALE_MODE_FIT -> {
-                        // 16:9 Letterbox
-                        canvas.drawColor(Color.BLACK, PorterDuff.Mode.CLEAR)
-                        val scale = minOf(surfaceWidth.toFloat() / bitmap.width, surfaceHeight.toFloat() / bitmap.height)
-                        val dstW = (bitmap.width * scale).toInt()
-                        val dstH = (bitmap.height * scale).toInt()
-                        val left = (surfaceWidth - dstW) / 2
-                        val top = (surfaceHeight - dstH) / 2
-                        val dstRect = Rect(left, top, left + dstW, top + dstH)
-                        canvas.drawBitmap(bitmap, null, dstRect, paint)
-                    }
-                    PreferencesManager.SCALE_MODE_FILL -> {
-                        // Fill Crop
-                        val scale = maxOf(surfaceWidth.toFloat() / bitmap.width, surfaceHeight.toFloat() / bitmap.height)
-                        val dstW = (bitmap.width * scale).toInt()
-                        val dstH = (bitmap.height * scale).toInt()
-                        val left = (surfaceWidth - dstW) / 2
-                        val top = (surfaceHeight - dstH) / 2
-                        val dstRect = Rect(left, top, left + dstW, top + dstH)
-                        canvas.drawBitmap(bitmap, null, dstRect, paint)
-                    }
-                }
+                // Fullscreen 1920x1200 16:10 native mapping
+                val dstRect = Rect(0, 0, surfaceWidth, surfaceHeight)
+                canvas.drawBitmap(bitmap, null, dstRect, paint)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Frame render error: ${e.message}")
