@@ -11,6 +11,8 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
@@ -47,14 +49,23 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val fpsMeter = FpsMeter()
 
     private var activeDevice: CaptureDeviceInfo? = null
-    private var isUsingUvc: Boolean = false
+    private var isUsingUvc: Boolean = true
     private var isSurfaceReady: Boolean = false
+
+    private val scanHandler = Handler(Looper.getMainLooper())
+    private val scanRunnable = object : Runnable {
+        override fun run() {
+            if (!uvcEngine.isCapturing() && isSurfaceReady) {
+                scanAndConnect()
+            }
+            scanHandler.postDelayed(this, 1500)
+        }
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
-        if (cameraGranted && isSurfaceReady) {
+        if (isSurfaceReady) {
             scanAndConnect()
         }
     }
@@ -128,6 +139,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         setupListeners()
         registerUsbReceiver()
         checkPermissions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        scanHandler.post(scanRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        scanHandler.removeCallbacks(scanRunnable)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -211,13 +232,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun checkPermissions() {
-        val permissions = mutableListOf(Manifest.permission.CAMERA)
+        val permissions = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.RECORD_AUDIO)
         }
-
-        val hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        if (!hasCamera) {
+        if (permissions.isNotEmpty()) {
             permissionLauncher.launch(permissions.toTypedArray())
         }
     }
@@ -235,23 +254,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             return
         }
 
-        isUsingUvc = false
-        val preferredCamera = deviceManager.getPreferredCaptureCamera()
-        activeDevice = preferredCamera
-
-        if (preferredCamera != null) {
-            binding.surfaceView.visibility = View.GONE
-            binding.previewView.visibility = View.VISIBLE
-            binding.layoutDisconnected.visibility = View.GONE
-            binding.hudOverlay.visibility = View.VISIBLE
-            cameraEngine.startCapture(preferredCamera, prefs.targetFps)
-            binding.tvDeviceBadge.text = preferredCamera.name
-        } else {
-            binding.surfaceView.visibility = View.GONE
-            binding.previewView.visibility = View.GONE
-            binding.layoutDisconnected.visibility = View.VISIBLE
-            binding.hudOverlay.visibility = View.GONE
-        }
+        binding.surfaceView.visibility = View.VISIBLE
+        binding.previewView.visibility = View.GONE
+        binding.layoutDisconnected.visibility = View.GONE
+        binding.hudOverlay.visibility = View.VISIBLE
+        binding.tvDeviceBadge.text = "Plug in USB Capture Card..."
     }
 
     private fun toggleAudio() {

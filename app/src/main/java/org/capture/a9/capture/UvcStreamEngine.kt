@@ -83,11 +83,11 @@ class UvcStreamEngine(
     }
 
     fun findAndStartCapture(): Boolean {
-        if (isStreaming.get()) {
-            return true
-        }
+        val devices = usbManager.deviceList
+        Log.d(TAG, "Scanning USB devices (count: ${devices.size})")
 
-        for (device in usbManager.deviceList.values) {
+        for (device in devices.values) {
+            Log.d(TAG, "Found device: ${device.productName} (vendor=0x${device.vendorId.toString(16)}, product=0x${device.productId.toString(16)}, class=${device.deviceClass})")
             if (isUvcDevice(device)) {
                 usbDevice = device
                 if (usbManager.hasPermission(device)) {
@@ -255,7 +255,6 @@ class UvcStreamEngine(
                             frameBuffer.write(rawBuffer, offset, payloadLen)
                         }
 
-                        // Complete Frame Trigger
                         if (inJpeg && (isEof || (lastFid != -1 && fid != lastFid))) {
                             val jpegBytes = frameBuffer.toByteArray()
                             if (jpegBytes.size > 8192) {
@@ -304,8 +303,6 @@ class UvcStreamEngine(
             if (canvas != null) {
                 val surfaceWidth = canvas.width
                 val surfaceHeight = canvas.height
-
-                // Fullscreen 1920x1200 16:10 native mapping
                 val dstRect = Rect(0, 0, surfaceWidth, surfaceHeight)
                 canvas.drawBitmap(bitmap, null, dstRect, paint)
             }
@@ -321,6 +318,8 @@ class UvcStreamEngine(
             }
         }
     }
+
+    fun isCapturing(): Boolean = isStreaming.get()
 
     fun stopCapture() {
         isStreaming.set(false)
