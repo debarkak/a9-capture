@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- Cyberpunk Obsidian Palette -->
+    <color name="bg_dark">#080A0F</color>
+    <color name="bg_surface">#121620</color>
+    <color name="bg_glass">#D910141D</color>
+    <color name="bg_glass_card">#801A202C</color>
+    
+    <!-- Neon Highlights -->
+    <color name="cyan_accent">#00E5FF</color>
+    <color name="cyan_glow">#3300E5FF</color>
+    <color name="emerald_accent">#00E676</color>
+    <color name="purple_accent">#7C4DFF</color>
+    <color name="pink_accent">#FF4081</color>
+    <color name="amber_accent">#FFD700</color>
+    <color name="red_accent">#FF1744</color>
+    
+    <!-- Text Colors -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+    
+    <!-- Borders -->
+    <color name="border_glass">#2A3447</color>
+    <color name="border_cyan">#6600E5FF</color>
+</resources>

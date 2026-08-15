@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">A9 Capture</string>
+    <string name="title_connected">CAPTURE ACTIVE</string>
+    <string name="title_disconnected">NO CAPTURE CARD DETECTED</string>
+    <string name="subtitle_connect_prompt">Plug in an HDMI-to-USB capture card via USB-C to start monitoring at 90Hz</string>
+    <string name="btn_refresh">Scan USB Devices</string>
+    <string name="btn_settings">Settings</string>
+    <string name="btn_snapshot">Snapshot</string>
+    <string name="btn_audio_toggle">Audio</string>
+    <string name="aspect_ratio">Aspect Ratio</string>
+    <string name="aspect_stretch_16_10">Stretch (16:10 Full A9+)</string>
+    <string name="aspect_fit_16_9">Fit 16:9 (Letterbox)</string>
+    <string name="aspect_fill">Fill Screen (Crop)</string>
+    <string name="aspect_native">Original 1:1</string>
+    <string name="device_selected">Selected Device:</string>
+    <string name="resolution">Resolution:</string>
+    <string name="framerate">Framerate:</string>
+</resources>
